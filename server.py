@@ -1,118 +1,115 @@
 from contextlib import asynccontextmanager
-from datetime import datetime
+from typing import List
+from datetime import date
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Query
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from migrate_db import Announcement, init_orm, close_orm, get_session
-from schema import ItemAnnUpdate, ItemAnnCreate, ItemAnnSearchParams
+from schema import ItemAnnCreate, ItemAnnUpdate, AnnouncementSchema
 
 
 @asynccontextmanager
 async def orm_context(app: FastAPI):
-    print("Start")
+    print("Starting ORM...")
     await init_orm()
     try:
         yield
     finally:
         await close_orm()
-        print("Finish")
+        print("Closing ORM...")
 
 app = FastAPI(lifespan=orm_context)
 
 
-@app.post('/announcement', tags=['todo'], response_model=dict)
-async def create_ann(todo: ItemAnnCreate, session: AsyncSession = Depends(get_session)):  # Зависимость сессии
-    try:
-        session.add(Announcement(**dict(todo)))
-        await session.commit()
-    except Exception as ex:
-        return {"status": "error", "message": f"Ошибка: {str(ex)}"}
-    return {"status": "ok", "data": todo.dict()}
+# Создание нового объявления
+@app.post('/advertisement', tags=['create'])
+async def create_ann(todo: ItemAnnCreate, session: AsyncSession = Depends(get_session)):
+    new_ann = Announcement(**todo.model_dump())
+    session.add(new_ann)
+    await session.commit()
+    return new_ann
 
 
-@app.patch('/announcement/{ann_id}', tags=['todo'], response_model=dict)
-async def search_id(ann_id: int, update_data: ItemAnnUpdate, session: AsyncSession = Depends(get_session)):
-    try:
-        ann = await session.get(Announcement, ann_id)
-        if ann is None:
-            raise HTTPException(status_code=404, detail=f"Запись с ID={ann_id} не найдена.")
+# Обновление существующего объявления
+@app.patch('/advertisement/{ann_id}', tags=['update'])
+async def update_ann(ann_id: int, update_data: ItemAnnUpdate, session: AsyncSession = Depends(get_session)):
+    ann = await session.get(Announcement, ann_id)
+    if ann is None:
+        raise HTTPException(status_code=404, detail=f"Объявление с ID={ann_id} не найдено.")
 
-        # Частичное обновление полей
-        update_values = update_data.model_dump(exclude_unset=True)
-        for attr, value in update_values.items():
-            setattr(ann, attr, value)
+    # Применяем частичные обновления
+    update_values = update_data.model_dump(exclude_unset=True)
+    for attr, value in update_values.items():
+        setattr(ann, attr, value)
 
-        # Сохраняем изменения
-        await session.commit()
-        await session.refresh(ann)
-        return {"status": "ok", "data": ann.dict}
-    except Exception as ex:
-        raise HTTPException(status_code=500, detail=f"Ошибка при обновлении объявления: {ex}")
+    await session.commit()
+    await session.refresh(ann)
+    return ann
 
 
-@app.delete('/announcement/{ann_id}', response_model=dict)
+# Удаление объявления
+@app.delete('/advertisement/{ann_id}', tags=['delete'])
 async def delete_ann(ann_id: int, session: AsyncSession = Depends(get_session)):
-    try:
-        ann = await session.get(Announcement, ann_id)
-        if ann is None:
-            raise HTTPException(status_code=404, detail=f"Запись с ID={ann_id} не найдена.")
+    ann = await session.get(Announcement, ann_id)
+    if ann is None:
+        raise HTTPException(status_code=404, detail=f"Объявление с ID={ann_id} не найдено.")
 
-        # Удаление объявления
-        await session.delete(ann)
-        await session.commit()
-    except Exception as ex:
-        return {"status": "error", "message": f"Ошибка: {str(ex)}"}
-    return {"status": "ok", "data": ann.dict}
+    await session.delete(ann)
+    await session.commit()
+    return {"detail": "Удалено успешно."}
 
 
-@app.get('/announcement/{ann_id}', response_model=dict)
-async def search_id(ann_id: int, session: AsyncSession = Depends(get_session)):
-    try:
-        ann = await session.get(Announcement, ann_id)
-        if ann is None:
-            raise HTTPException(status_code=404, detail=f"Запись с ID={ann_id} не найдена.")
-    except Exception as ex:
-        return {"status": "error", "message": f"Ошибка: {str(ex)}"}
-    return {"status": "ok", "data": ann.dict}
+# Получение конкретного объявления по id
+@app.get('/advertisement/{ann_id}', tags=['read'])
+async def get_ann_by_id(ann_id: int, session: AsyncSession = Depends(get_session)):
+    ann = await session.get(Announcement, ann_id)
+    if ann is None:
+        raise HTTPException(status_code=404, detail=f"Объявление с ID={ann_id} не найдено.")
+    return ann
 
 
-@app.get('/announcement', response_model=dict)
-async def search_params(params: ItemAnnSearchParams = Depends(), session: AsyncSession = Depends(get_session)):
-    try:
-        # Проверяем, что хотя бы один параметр задан
-        if not any(vars(params).values()):
-            raise HTTPException(status_code=400, detail="Требуется хотя бы один параметр для поиска.")
+# Поиск объявлений по параметрам
+@app.get('/advertisement', tags=['search'], response_model=List[AnnouncementSchema])
+async def search_advertisements(
+    title: str | None = Query(None, alias='title'),
+    description: str | None = Query(None, alias='description'),
+    min_cost: float | None = Query(None, ge=0, le=1000000, alias='minCost'),
+    max_cost: float | None = Query(None, ge=0, le=1000000, alias='maxCost'),
+    owner: str | None = Query(None, alias='owner'),
+    create_date: date | None = Query(None, alias='createDate'),
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Фильтрует объявления по указанным критериям.
+    """
+    if all(x is None for x in [title, description, min_cost, max_cost, owner, create_date]):
+        raise HTTPException(status_code=400, detail="Требуется хотя бы один параметр для поиска.")
 
-        # Создаем запрос
-        query = select(Announcement)
+    query = select(Announcement)
+    filters = []
 
-        # Строим фильтры
-        filters = []
-        if params.title:
-            filters.append(Announcement.title.ilike(f"%{params.title}%"))
-        if params.description:
-            filters.append(Announcement.description.ilike(f"%{params.description}%"))
-        if params.cost:
-            filters.append(Announcement.cost == params.cost)
-        if params.owner:
-            filters.append(Announcement.owner == params.owner)
-        if params.create_date:
-            # Парсим дату из строки
-            create_date = datetime.strptime(params.create_date, "%Y-%m-%d").date()
-            filters.append(Announcement.create_date == create_date)
+    if title:
+        filters.append(Announcement.title.ilike(f"%{title}%"))
+    if description:
+        filters.append(Announcement.description.ilike(f"%{description}%"))
+    if min_cost is not None:
+        filters.append(Announcement.cost >= min_cost)
+    if max_cost is not None:
+        filters.append(Announcement.cost <= max_cost)
+    if owner:
+        filters.append(Announcement.owner == owner)
+    if create_date:
+        filters.append(Announcement.create_date == create_date)
 
-        # Добавляем фильтры в запрос
-        if filters:
-            query = query.where(and_(*filters))
+    if filters:
+        query = query.where(and_(*filters))
 
-        # Выполняем запрос
-        result = await session.execute(query)
-        adverts = [res.dict for res in result.scalars().all()]
+    results = await session.execute(query)
+    adverts = results.scalars().all()
+    if not adverts:
+        raise HTTPException(status_code=404, detail="Ничего не найдено.")
 
-        if adverts is None:
-            raise HTTPException(status_code=404, detail=f"Записей с данными параметрами нет.")
-    except Exception as ex:
-        return {"status": "error", "message": f"Ошибка: {str(ex)}"}
-    return {"status": "ok", "data": adverts}
+    # Преобразуем объекты SQLAlchemy в объекты Pydantic
+    return [AnnouncementSchema.from_orm(ad) for ad in adverts]

@@ -1,7 +1,5 @@
-﻿import asyncio
-import datetime
+﻿import datetime
 import os
-import asyncpg
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncAttrs
 

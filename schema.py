@@ -1,7 +1,5 @@
+from pydantic import BaseModel, ConfigDict
 from datetime import date
-
-from fastapi import Query
-from pydantic import BaseModel
 
 
 class ItemAnnCreate(BaseModel):
@@ -9,6 +7,16 @@ class ItemAnnCreate(BaseModel):
     description: str | None = None
     cost: float
     owner: str
+
+class AnnouncementSchema(BaseModel):
+    title: str
+    description: str | None
+    cost: float
+    owner: str
+    create_date: date | None
+
+    # Активируем поддержку ORM-конвертации
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ItemAnnUpdate(BaseModel):
